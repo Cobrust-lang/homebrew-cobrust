@@ -1,0 +1,176 @@
+name: Auto-bump formula on new Cobrust release
+
+on:
+  schedule:
+    - cron: '0 * * * *'  # hourly poll
+  workflow_dispatch:      # manual trigger
+
+permissions:
+  contents: write
+
+jobs:
+  check-and-bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap repo
+        uses: actions/checkout@v4
+
+      - name: Get latest Cobrust release tag
+        id: latest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG=$(gh release view --repo Cobrust-lang/cobrust --json tagName --jq .tagName)
+          if [ -z "$TAG" ]; then
+            echo "ERROR: empty tag from upstream release view" >&2
+            exit 1
+          fi
+          VERSION="${TAG#v}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Upstream latest: tag=$TAG version=$VERSION"
+
+      - name: Read current formula version
+        id: current
+        run: |
+          set -euo pipefail
+          CUR=$(grep -E '^\s*version\s+"' Formula/cobrust.rb | head -n1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$CUR" ]; then
+            echo "ERROR: could not parse current formula version" >&2
+            exit 1
+          fi
+          echo "version=$CUR" >> "$GITHUB_OUTPUT"
+          echo "Current formula version: $CUR"
+
+      - name: Check if update needed
+        id: check
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.latest.outputs.version }}" = "${{ steps.current.outputs.version }}" ]; then
+            echo "Formula already at ${{ steps.current.outputs.version }} — no action needed."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Update needed: ${{ steps.current.outputs.version }} -> ${{ steps.latest.outputs.version }}"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download SHA256SUMS + extract per-platform shas
+        if: steps.check.outputs.skip == 'false'
+        id: shas
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.latest.outputs.tag }}"
+          SUMS_URL="https://github.com/Cobrust-lang/cobrust/releases/download/${TAG}/SHA256SUMS"
+          echo "Fetching $SUMS_URL"
+          curl -sSL --fail "$SUMS_URL" -o /tmp/sums
+          M1=$(grep "aarch64-apple-darwin-m1.tar.gz" /tmp/sums | awk '{print $1}' | head -n1)
+          GNU_V3=$(grep "x86_64-unknown-linux-gnu-v3.tar.gz" /tmp/sums | awk '{print $1}' | head -n1)
+          ARM_NEON=$(grep "aarch64-unknown-linux-gnu-neon.tar.gz" /tmp/sums | awk '{print $1}' | head -n1)
+          for var in M1 GNU_V3 ARM_NEON; do
+            val=$(eval echo "\$$var")
+            if [ -z "$val" ]; then
+              echo "ERROR: missing sha for $var in SHA256SUMS" >&2
+              exit 1
+            fi
+          done
+          echo "m1=$M1" >> "$GITHUB_OUTPUT"
+          echo "gnu_v3=$GNU_V3" >> "$GITHUB_OUTPUT"
+          echo "arm_neon=$ARM_NEON" >> "$GITHUB_OUTPUT"
+          echo "Resolved shas — m1=$M1 gnu_v3=$GNU_V3 arm_neon=$ARM_NEON"
+
+      - name: Bump formula
+        if: steps.check.outputs.skip == 'false'
+        env:
+          NEW_TAG: ${{ steps.latest.outputs.tag }}
+          NEW_VERSION: ${{ steps.latest.outputs.version }}
+          M1_SHA: ${{ steps.shas.outputs.m1 }}
+          GNU_V3_SHA: ${{ steps.shas.outputs.gnu_v3 }}
+          ARM_NEON_SHA: ${{ steps.shas.outputs.arm_neon }}
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          path = Path("Formula/cobrust.rb")
+          src = path.read_text()
+
+          new_tag = os.environ["NEW_TAG"]
+          new_version = os.environ["NEW_VERSION"]
+          m1_sha = os.environ["M1_SHA"]
+          gnu_v3_sha = os.environ["GNU_V3_SHA"]
+          arm_neon_sha = os.environ["ARM_NEON_SHA"]
+
+          # 1) Top-level version line.
+          src, n_version = re.subn(
+              r'^(\s*version\s+)"[^"]+"',
+              lambda m: f'{m.group(1)}"{new_version}"',
+              src,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          assert n_version == 1, f"version replacement count={n_version}"
+
+          # 2) Per-asset URL + sha256 pairs. Each asset suffix is unique within the formula.
+          #    We update both the URL (which embeds the tag) and the immediately-following sha256.
+          def bump_asset(text: str, asset_suffix: str, sha: str) -> str:
+              # Match the URL line carrying this asset, then the next sha256 line on the
+              # immediately-following line (allowing whitespace).
+              url_pattern = re.compile(
+                  r'(url\s+")https://github\.com/Cobrust-lang/cobrust/releases/download/v[^/]+/cobrust-v[^-]+(-'
+                  + re.escape(asset_suffix)
+                  + r')(")',
+                  re.MULTILINE,
+              )
+              new_url = (
+                  f'\\1https://github.com/Cobrust-lang/cobrust/releases/download/{new_tag}/cobrust-{new_tag}\\2\\3'
+              )
+              text, n_url = url_pattern.subn(new_url, text, count=1)
+              assert n_url == 1, f"URL replacement count for {asset_suffix} = {n_url}"
+
+              # Bump the sha256 that immediately follows the just-rewritten URL.
+              sha_pattern = re.compile(
+                  r'(url\s+"https://github\.com/Cobrust-lang/cobrust/releases/download/'
+                  + re.escape(new_tag)
+                  + r'/cobrust-'
+                  + re.escape(new_tag)
+                  + r'-'
+                  + re.escape(asset_suffix)
+                  + r'"\s*\n\s*sha256\s+")[0-9a-f]{64}(")',
+                  re.MULTILINE,
+              )
+              text, n_sha = sha_pattern.subn(rf'\g<1>{sha}\g<2>', text, count=1)
+              assert n_sha == 1, f"sha256 replacement count for {asset_suffix} = {n_sha}"
+              return text
+
+          src = bump_asset(src, "aarch64-apple-darwin-m1.tar.gz", m1_sha)
+          src = bump_asset(src, "x86_64-unknown-linux-gnu-v3.tar.gz", gnu_v3_sha)
+          src = bump_asset(src, "aarch64-unknown-linux-gnu-neon.tar.gz", arm_neon_sha)
+
+          path.write_text(src)
+          print("Bumped formula in place.")
+          PY
+
+      - name: Commit + push if changes
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/cobrust.rb
+          if git diff --cached --quiet; then
+            echo "No changes to commit after bump — formula likely already matched upstream."
+            exit 0
+          fi
+          git commit -m "Auto-bump cobrust formula to ${{ steps.latest.outputs.tag }}"
+          git push origin main
+
+      - name: Summary
+        run: |
+          if [ "${{ steps.check.outputs.skip }}" = "true" ]; then
+            echo "::notice::Formula already at ${{ steps.current.outputs.version }}; no bump performed."
+          else
+            echo "::notice::Formula bumped from ${{ steps.current.outputs.version }} to ${{ steps.latest.outputs.version }}."
+          fi
