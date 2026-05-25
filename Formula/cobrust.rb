@@ -1,15 +1,15 @@
 class Cobrust < Formula
   desc "Rust-implemented Python successor with AI-native compiler"
   homepage "https://github.com/Cobrust-lang/cobrust"
-  version "0.6.0"
+  version "0.6.1"
   license any_of: ["Apache-2.0", "MIT"]
 
   on_macos do
     on_arm do
       # Apple Silicon M1 (default for arm64 macOS).
       # M2-tuned variant also published; users on M2+ may prefer the m2 tarball.
-      url "https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-aarch64-apple-darwin-m1.tar.gz"
-      sha256 "5138b55962774f06140fa2f586065f245cda5bdadea3fffaa618b535f8da45d6"
+      url "https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-aarch64-apple-darwin-m1.tar.gz"
+      sha256 "2d998c1caec08d8cd27b2f9aba30b18e9300ccb8d25905a6688ef108a1eba416"
     end
   end
 
@@ -17,13 +17,13 @@ class Cobrust < Formula
     on_intel do
       # Default to x86_64-v3 (AVX2) for modern Intel/AMD.
       # v1 / v4 variants are also published; v4 requires AVX-512.
-      url "https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-x86_64-unknown-linux-gnu-v3.tar.gz"
-      sha256 "71974ea46e0135abd337716b5b8beff6c67c62b86dc2683d3347aa81edbde280"
+      url "https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-x86_64-unknown-linux-gnu-v3.tar.gz"
+      sha256 "1b51abbc503ef2ca047c3c2844c5d20e908946c715c61ab591b69699ea8a23d7"
     end
     on_arm do
       # ARM neon (universal aarch64 baseline). SVE variant also published.
-      url "https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.0/cobrust-v0.6.0-aarch64-unknown-linux-gnu-neon.tar.gz"
-      sha256 "30d40d50f37ec311399238ce01e90378b51c5ddd296ddc4f416344642576b769"
+      url "https://github.com/Cobrust-lang/cobrust/releases/download/v0.6.1/cobrust-v0.6.1-aarch64-unknown-linux-gnu-neon.tar.gz"
+      sha256 "bcac9f046556a4d3ee5a4cddc99ce9bf089a35db417854418f5a0c298d97f329"
     end
   end
 
